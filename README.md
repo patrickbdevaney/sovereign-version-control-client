@@ -27,7 +27,7 @@ collapses that into `forge-new myproject`.
   laptop  ──git push──▶  Forgejo on a small always-on box
                               │        (private network, e.g. Tailscale)
                               │
-                     nightly, restic encrypts HERE
+                    on a timer, restic encrypts HERE
                               ▼
                      off-site object storage (ciphertext only)
 ```

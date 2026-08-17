@@ -77,7 +77,22 @@ code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://$FORGE_HO
 if [ "$code" = "200" ]; then
     pass "https://$FORGE_HOST/ -> 200"
 else
-    fail "https://$FORGE_HOST/ -> ${code:-no response}"
+    # The tailnet name is the only path with real TLS. A typical deployment
+    # also serves plain HTTP on the LAN, so check that before concluding the
+    # forge is down — it distinguishes "tailnet is down" from "forge is down".
+    lan_ok=""
+    if [ -n "$FORGE_LAN_HOST" ]; then
+        lan_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 \
+                    "http://$FORGE_LAN_HOST:${FORGE_WEB_PORT:-3000}/api/healthz" 2>/dev/null)"
+        [ "$lan_code" = "200" ] && lan_ok=1
+    fi
+    if [ -n "$lan_ok" ]; then
+        fail "https://$FORGE_HOST/ -> ${code:-no response}, but the forge is up on the LAN
+        (http://$FORGE_LAN_HOST:${FORGE_WEB_PORT:-3000} answers). The tailnet path is what is broken.
+        Check: tailscale status, and 'tailscale serve status' on the server."
+    else
+        fail "https://$FORGE_HOST/ -> ${code:-no response}"
+    fi
 fi
 
 # 4. ssh auth ---------------------------------------------------------------

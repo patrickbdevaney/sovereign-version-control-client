@@ -13,6 +13,10 @@ FORGE_HOST="your-box.your-tailnet.ts.net"
 # forge-doctor and installed as the "<alias>-lan" SSH host. Leave empty to skip.
 FORGE_LAN_HOST=""
 
+# Port the web UI listens on over the LAN, plain HTTP. Only used by
+# forge-doctor, to tell "the tailnet is down" apart from "the forge is down".
+FORGE_WEB_PORT="3000"
+
 # Port Forgejo's built-in SSH server listens on. This is NOT the host's sshd.
 # Docker installs commonly map it to 2222; a native install often uses 22.
 FORGE_SSH_PORT="2222"

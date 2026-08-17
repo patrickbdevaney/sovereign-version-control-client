@@ -35,7 +35,7 @@ plane is unreachable, you can still push at home.
 The forge is a single point of failure until it's backed up. The arrangement
 these notes assume:
 
-- **restic**, running on the forge host, on a nightly timer.
+- **restic**, running on the forge host on a systemd timer.
 - It backs up the git repositories **and** a database dump — a repo backup
   without the database loses issues, PRs, users, and SSH keys.
 - Encryption happens **on the forge, before anything leaves it**. The remote
@@ -48,8 +48,23 @@ Sketch:
 
 ```bash
 restic backup /path/to/forgejo/repositories /path/to/dump.sql
-restic forget --keep-daily 7 --keep-weekly 5 --keep-monthly 12 --prune
+restic forget --keep-hourly 24 --keep-daily 14 --keep-weekly 8 --keep-monthly 12
 ```
+
+### Match the retention policy to the backup interval
+
+If you back up **hourly**, a policy of `--keep-daily N` with no `--keep-hourly`
+throws away the granularity you just paid for: `restic forget` keeps only the
+*last* snapshot of each day, so every intra-day snapshot is discarded. Run
+`forget` on the same hourly schedule and the previous hour's snapshot is gone
+within the hour — you get freshness, but you cannot roll back to earlier the
+same day, which is exactly what you want after an accidental deletion or a bad
+force-push. Confirm it yourself with `restic forget --dry-run`, which prints
+what it would keep and why.
+
+`--prune` is the expensive half. `restic forget --prune` only repacks when a
+snapshot was actually removed — but under an hourly schedule that is every run.
+Prefer `forget` hourly and `prune` on a daily or weekly timer.
 
 ## Test the restore, not the backup
 
