@@ -80,9 +80,16 @@ result by opening an actual SSH session. Re-running is safe.
 ```bash
 forge-new myproject                    # create + init + commit + push
 forge-new myproject --public --desc "..."
+forge-new acme/myproject               # create inside the "acme" organisation
 forge-new                              # run inside an existing repo with no
                                        #   origin, and it adopts that repo
 ```
+
+A bare name goes in your own namespace; `owner/name` targets an organisation.
+`forge-clone` takes the same two forms. Organisations use a different API
+endpoint (`/orgs/{org}/repos`) and need a token carrying `write:organization` —
+without it the server returns 403 and `forge-new` tells you exactly which scope
+is missing.
 
 After that it is ordinary git, forever:
 
@@ -116,7 +123,8 @@ credential. Two options:
 
 1. **Token (recommended).** Create one at
    `https://<your-forge>/user/settings/applications` with scopes
-   `write:user` and `write:repository`, then:
+   `write:user` and `write:repository` — plus `write:organization` if you
+   create repos inside organisations — then:
 
    ```bash
    printf '%s' 'TOKEN' > ~/.config/forge/token

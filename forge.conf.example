@@ -32,8 +32,9 @@ FORGE_ALIAS="forge"
 FORGE_KEY="$HOME/.ssh/id_ed25519_forge"
 
 # Where the API token lives, if you use one. Created by you at
-# Settings -> Applications -> Generate New Token with scopes
-# write:user and write:repository. Must be mode 600.
+# Settings -> Applications -> Generate New Token with scopes write:user and
+# write:repository -- add write:organization if you create repos inside
+# organisations. Must be mode 600.
 # If this file is absent, scripts prompt for a password instead.
 FORGE_TOKEN_FILE="$HOME/.config/forge/token"
 

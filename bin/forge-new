@@ -9,9 +9,12 @@ source "$SCRIPT_DIR/../lib/common.sh"
 
 usage() {
     cat <<EOF
-usage: forge-new <name> [options]
+usage: forge-new <name|org/name> [options]
 
-Creates <name> on the forge, then points a local repo at it and pushes.
+Creates the repo on the forge, then points a local repo at it and pushes.
+
+A bare <name> is created in your own namespace. Give an explicit <org/name> to
+create it inside an organisation -- that needs a token with write:organization.
 
 If the current directory is a git repo with no 'origin', that repo is adopted.
 Otherwise ./<name> is created, initialised, and given a README.
@@ -43,13 +46,18 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$NAME" ] || { usage >&2; die "repo name is required"; }
-printf '%s' "$NAME" | grep -qE '^[A-Za-z0-9._-]+$' \
-    || die "invalid repo name: $NAME (use letters, digits, . _ -)"
+printf '%s' "$NAME" | grep -qE '^([A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$' \
+    || die "invalid repo name: $NAME (use letters, digits, . _ - and at most one /)"
 
 need git
 need curl
 load_config
 VISIBILITY="${VISIBILITY:-$FORGE_DEFAULT_VISIBILITY}"
+
+# owner/repo, where owner is you unless one was given explicitly.
+TARGET="$(qualify "$NAME")"
+OWNER="${TARGET%%/*}"
+REPO="${TARGET##*/}"
 
 PRIVATE_JSON="true"
 [ "$VISIBILITY" = "public" ] && PRIVATE_JSON="false"
@@ -66,11 +74,19 @@ Use --dir to create the repo somewhere else."
     DIR="$(git rev-parse --show-toplevel)"
     ADOPTED=1
 fi
-DIR="${DIR:-$PWD/$NAME}"
+# The local directory is named after the repo, never owner/repo.
+DIR="${DIR:-$PWD/$REPO}"
 
 # --- create it on the server ------------------------------------------------
 
-step "create $FORGE_USER/$NAME on $FORGE_HOST ($VISIBILITY)"
+step "create $TARGET on $FORGE_HOST ($VISIBILITY)"
+
+# Your own namespace and an organisation are different endpoints.
+if [ "$OWNER" = "$FORGE_USER" ]; then
+    ENDPOINT="/user/repos"
+else
+    ENDPOINT="/orgs/$OWNER/repos"
+fi
 
 body="$(mktemp)"; chmod 600 "$body"
 python3 -c '
@@ -81,16 +97,29 @@ json.dump({"name": sys.argv[1],
            "auto_init": False,
            "default_branch": "main"},
           open(sys.argv[4], "w"))
-' "$NAME" "$DESC" "$PRIVATE_JSON" "$body"
+' "$REPO" "$DESC" "$PRIVATE_JSON" "$body"
 
-resp="$(api POST "/user/repos" "$body")"
+resp="$(api POST "$ENDPOINT" "$body")"
 rm -f "$body"
 code="$(resp_code "$resp")"
 
 case "$code" in
     201) ok "created $(resp_body "$resp" | json_field full_name)" ;;
     409) warn "repo already exists on the server; wiring the local side to it" ;;
-    401|403) die "authentication failed (HTTP $code). Check your token or password." ;;
+    404) die "no such organisation '$OWNER' on $FORGE_HOST, or you cannot see it.
+Existing owners are listed at https://$FORGE_HOST/explore/organizations" ;;
+    401|403)
+        msg="$(resp_body "$resp" | json_field message)"
+        if [ "$OWNER" != "$FORGE_USER" ]; then
+            die "cannot create in organisation '$OWNER' (HTTP $code).
+${msg:+Server said: $msg
+}Creating a repo inside an organisation needs a token with the
+write:organization scope, which a user-namespace token does not have.
+Regenerate at https://$FORGE_HOST/user/settings/applications with
+write:user, write:repository and write:organization."
+        fi
+        die "authentication failed (HTTP $code). Check your token or password.${msg:+
+Server said: $msg}" ;;
     000) die "could not reach $FORGE_API — run forge-doctor" ;;
     *)   die "create failed (HTTP $code): $(resp_body "$resp")" ;;
 esac
@@ -119,10 +148,10 @@ fi
 if ! git rev-parse HEAD >/dev/null 2>&1; then
     if [ -z "$(git status --porcelain)" ]; then
         {
-            printf '# %s\n\n' "$NAME"
+            printf '# %s\n\n' "$REPO"
             [ -n "$DESC" ] && printf '%s\n\n' "$DESC"
             printf 'Hosted on a private Forgejo instance.\n\n'
-            printf '    git clone %s\n' "$(ssh_url "$NAME")"
+            printf '    git clone %s\n' "$(ssh_url "$TARGET")"
         } > README.md
         git add README.md
         ok "seeded README.md"
@@ -134,8 +163,8 @@ if ! git rev-parse HEAD >/dev/null 2>&1; then
     ok "initial commit"
 fi
 
-git remote add origin "$(ssh_url "$NAME")"
-ok "origin -> $(ssh_url "$NAME")"
+git remote add origin "$(ssh_url "$TARGET")"
+ok "origin -> $(ssh_url "$TARGET")"
 
 # --- push -------------------------------------------------------------------
 
@@ -153,5 +182,5 @@ else
 fi
 
 info ""
-info "  web:  $(web_url "$NAME")"
-info "  ssh:  $(ssh_url "$NAME")"
+info "  web:  $(web_url "$TARGET")"
+info "  ssh:  $(ssh_url "$TARGET")"

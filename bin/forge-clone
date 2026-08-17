@@ -27,12 +27,8 @@ DEST=""
 if [ $# -gt 0 ] && [ "$1" != "--" ]; then DEST="$1"; shift; fi
 [ "${1:-}" = "--" ] && shift
 
-case "$SPEC" in
-    */*) TARGET="$SPEC" ;;
-    *)   TARGET="$FORGE_USER/$SPEC" ;;
-esac
-
-URL="$FORGE_ALIAS:$TARGET.git"
+TARGET="$(qualify "$SPEC")"
+URL="$(ssh_url "$TARGET")"
 step "git clone $URL${DEST:+ $DEST}"
 
 if [ -n "$DEST" ]; then

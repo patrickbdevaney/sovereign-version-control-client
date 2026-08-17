@@ -159,6 +159,17 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 
 expand_tilde() { printf '%s\n' "${1/#\~/$HOME}"; }
 
-ssh_url() { printf '%s:%s/%s.git\n' "$FORGE_ALIAS" "$FORGE_USER" "$1"; }
+# qualify <name|owner/name> -> owner/name
+# A bare name means your own namespace; an explicit owner (a user or an org)
+# is passed through untouched.
+qualify() {
+    case "$1" in
+        */*) printf '%s' "$1" ;;
+        *)   printf '%s/%s' "$FORGE_USER" "$1" ;;
+    esac
+}
 
-web_url() { printf 'https://%s/%s/%s\n' "$FORGE_HOST" "$FORGE_USER" "$1"; }
+# Both take a qualified owner/name.
+ssh_url() { printf '%s:%s.git\n' "$FORGE_ALIAS" "$1"; }
+
+web_url() { printf 'https://%s/%s\n' "$FORGE_HOST" "$1"; }
