@@ -77,6 +77,20 @@ fi
 # The local directory is named after the repo, never owner/repo.
 DIR="${DIR:-$PWD/$REPO}"
 
+# The target directory may already be a repo wired to a remote -- either from
+# --dir, or because ./<name> happens to exist. Catch it HERE, before anything is
+# created server-side: `git remote add origin` would fail afterwards and leave an
+# orphaned empty repository on the forge.
+if [ "$ADOPTED" -eq 0 ] && [ -e "$DIR/.git" ]; then
+    if existing_origin="$(git -C "$DIR" remote get-url origin 2>/dev/null)"; then
+        die "$DIR is already a git repo, and its 'origin' is:
+  $existing_origin
+Nothing was created on the forge. To publish that repo somewhere else, add a
+second remote instead:
+  git -C \"$DIR\" remote add <name> $(ssh_url "$TARGET")"
+    fi
+fi
+
 # --- create it on the server ------------------------------------------------
 
 step "create $TARGET on $FORGE_HOST ($VISIBILITY)"
