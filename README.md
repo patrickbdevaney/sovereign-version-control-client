@@ -141,6 +141,64 @@ rather than a command-line argument, so it never shows up in `ps` output or your
 shell history. Day-to-day `git push` doesn't touch the API at all — that's pure
 SSH key auth.
 
+## How this was built: two agents, two repos, one running system
+
+This repo and its server counterpart
+([sovereign-version-control](https://github.com/patrickbdevaney/sovereign-version-control))
+were written by two separate Claude Code instances — one on the laptop, one on
+the mini PC running the forge. They had **no shared context window and no
+channel to each other.** Everything they coordinated through was external and
+inspectable:
+
+| Shared medium | What it carried |
+|---|---|
+| GitHub, over the public internet | Source, history, and — critically — *conflict detection* |
+| The live Forgejo instance, over Tailscale | Ground truth neither agent controlled alone |
+| A human relaying summaries | Intent, priorities, and decisions |
+
+That is stigmergic coordination: the agents never addressed one another, they
+just kept modifying a shared environment and reading what the other had left
+behind.
+
+**The network topology decided what each agent could do.** The mini PC's own
+`sshd` is closed; only Forgejo's port 2222 and its HTTPS API are reachable. So
+the laptop agent could never read the server's filesystem or trust its claims
+directly — it could only observe the forge through the same interfaces any
+client uses, and had to *prove* things by running them. When it needed to know
+whether push-to-create was enabled, it pushed to a nonexistent repo and read the
+error. When it needed to know whether a backup retention policy discarded
+intra-day snapshots, it ran `restic forget --dry-run` against a scratch
+repository in a container rather than reasoning about the flags.
+
+Giving an agent an API surface instead of a shell is a real design pattern, not
+a limitation to work around. Capability was bounded by network configuration —
+something neither agent could talk its way past.
+
+**What went well.** Git's refusal to fast-forward is a coordination primitive.
+The laptop agent finished a set of fixes, tried to push, and was rejected — that
+non-fast-forward was how it *learned* the other agent had already shipped the
+same work (`2abed50`). It read the upstream diff, discarded its own duplicate
+commit, rebased, and contributed only the delta that was genuinely missing
+(`6d8f0f5`). No message passing was needed for that handoff; the repository
+itself carried the signal.
+
+**What went badly, and matters more.** Both agents independently introduced the
+*same* bug — a config template line ending in `>`, which silently turns into a
+shell redirect and breaks the file. Two agents from the same model family are
+not two independent reviewers; their mistakes correlate. What caught it was not
+a second author but a different *method*: running `bash -n` on the file instead
+of reading it. Redundant authorship buys much less than redundant verification.
+
+The other real cost was duplicated effort — the same six findings fixed twice,
+in parallel, because neither agent announced what it was working on. At this
+scale that is cheap. At ten agents it is the dominant cost, and the fix is
+boring: claim work in the shared medium (a branch, an issue, a commit) before
+starting it.
+
+A fuller account, with the commit-by-commit timeline and the credential-handling
+incident, is in
+[docs/multi-agent-collaboration.md](docs/multi-agent-collaboration.md).
+
 ## Notes
 
 - Repos are created with `auto_init: false` on purpose. An empty remote means
