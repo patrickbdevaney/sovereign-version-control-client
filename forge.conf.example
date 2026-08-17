@@ -1,0 +1,37 @@
+# Copy to ~/.config/forge/forge.conf (or ./forge.conf) and fill in.
+# This file is sourced by bash. No secrets belong here — only host names.
+#
+#   install -d -m 700 ~/.config/forge
+#   cp forge.conf.example ~/.config/forge/forge.conf
+#   chmod 600 ~/.config/forge/forge.conf
+
+# Hostname your forge is reachable at. With Tailscale this is the MagicDNS
+# name, which resolves both at home and away.
+FORGE_HOST="your-box.your-tailnet.ts.net"
+
+# Optional: same forge over the local network, used as a fallback by
+# forge-doctor and installed as the "<alias>-lan" SSH host. Leave empty to skip.
+FORGE_LAN_HOST=""
+
+# Port Forgejo's built-in SSH server listens on. This is NOT the host's sshd.
+# Docker installs commonly map it to 2222; a native install often uses 22.
+FORGE_SSH_PORT="2222"
+
+# Your username on the forge (the owner namespace for repos).
+FORGE_USER="yourname"
+
+# SSH host alias written into ~/.ssh/config. `git clone forge:user/repo.git`
+FORGE_ALIAS="forge"
+
+# Private key used for this forge. A dedicated key keeps it independent of
+# your GitHub keys.
+FORGE_KEY="$HOME/.ssh/id_ed25519_forge"
+
+# Where the API token lives, if you use one. Created by you at
+# Settings -> Applications -> Generate New Token with scopes
+# write:user and write:repository. Must be mode 600.
+# If this file is absent, scripts prompt for a password instead.
+FORGE_TOKEN_FILE="$HOME/.config/forge/token"
+
+# Default visibility for repos created by forge-new: private or public.
+FORGE_DEFAULT_VISIBILITY="private"

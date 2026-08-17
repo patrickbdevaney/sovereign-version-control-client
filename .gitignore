@@ -1,0 +1,21 @@
+# Local configuration — contains your host names, tailnet, and username.
+forge.conf
+
+# API tokens and any other credential material. Never commit.
+token
+*.token
+.netrc
+*.netrc
+*.pem
+*.key
+!*.pub
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Scratch
+tmp/
+*.log

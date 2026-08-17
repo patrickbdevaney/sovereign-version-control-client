@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# forge-setup — make this machine a client of your Forgejo forge.
+#
+# Generates a dedicated SSH key, installs an SSH host alias, and registers the
+# public key on the forge. Safe to re-run: every step is idempotent.
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+source "$SCRIPT_DIR/../lib/common.sh"
+
+usage() {
+    cat <<EOF
+usage: forge-setup [--no-upload]
+
+Prepares this machine to push to the forge described by your forge.conf:
+
+  1. generates \$FORGE_KEY if it does not exist (ed25519, no passphrase)
+  2. installs "Host \$FORGE_ALIAS" (and "-lan") into ~/.ssh/config
+  3. uploads the public key to the forge, unless --no-upload
+
+  --no-upload   skip step 3 and print the key for you to paste manually
+EOF
+}
+
+UPLOAD=1
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --no-upload) UPLOAD=0 ;;
+        -h|--help)   usage; exit 0 ;;
+        *)           usage >&2; die "unknown argument: $1" ;;
+    esac
+    shift
+done
+
+need ssh-keygen
+need curl
+load_config
+
+dim "config: $FORGE_CONF_USED"
+info ""
+
+# --- 1. key -----------------------------------------------------------------
+
+KEY="$(expand_tilde "$FORGE_KEY")"
+step "SSH key"
+if [ -f "$KEY" ]; then
+    ok "already present: $KEY"
+else
+    install -d -m 700 "$(dirname "$KEY")"
+    ssh-keygen -t ed25519 -f "$KEY" -N "" -q \
+        -C "$(whoami)@$(hostname -s) -> forgejo ($FORGE_HOST)"
+    ok "generated: $KEY"
+fi
+chmod 600 "$KEY"
+chmod 644 "$KEY.pub"
+dim "  $(ssh-keygen -lf "$KEY.pub")"
+info ""
+
+# --- 2. ssh config ----------------------------------------------------------
+
+step "~/.ssh/config"
+SSH_CONFIG="$HOME/.ssh/config"
+install -d -m 700 "$HOME/.ssh"
+[ -f "$SSH_CONFIG" ] || { : > "$SSH_CONFIG"; chmod 600 "$SSH_CONFIG"; }
+
+BEGIN_MARK="# >>> forge-setup: $FORGE_ALIAS >>>"
+END_MARK="# <<< forge-setup: $FORGE_ALIAS <<<"
+
+block="$BEGIN_MARK
+# Forgejo's own SSH server, which is usually not the host's sshd.
+Host $FORGE_ALIAS
+    HostName $FORGE_HOST
+    User git
+    Port $FORGE_SSH_PORT
+    IdentityFile $KEY
+    IdentitiesOnly yes
+"
+if [ -n "$FORGE_LAN_HOST" ]; then
+    block+="
+# Same forge over the LAN, for when the tailnet is unavailable at home.
+Host ${FORGE_ALIAS}-lan
+    HostName $FORGE_LAN_HOST
+    User git
+    Port $FORGE_SSH_PORT
+    IdentityFile $KEY
+    IdentitiesOnly yes
+"
+fi
+block+="$END_MARK"
+
+if grep -qF "$BEGIN_MARK" "$SSH_CONFIG"; then
+    # Replace the existing managed block, leaving the rest of the file alone.
+    tmp="$(mktemp)"
+    awk -v b="$BEGIN_MARK" -v e="$END_MARK" '
+        $0 == b { skip = 1 }
+        !skip   { print }
+        $0 == e { skip = 0 }
+    ' "$SSH_CONFIG" > "$tmp"
+    printf '%s\n' "$block" >> "$tmp"
+    cat "$tmp" > "$SSH_CONFIG"
+    rm -f "$tmp"
+    ok "updated managed block for '$FORGE_ALIAS'"
+else
+    # A new stanza must not land inside someone else's Host block; a blank
+    # line plus the marker keeps it self-contained at the end of the file.
+    printf '\n%s\n' "$block" >> "$SSH_CONFIG"
+    ok "added '$FORGE_ALIAS' (only the marked block is ever rewritten)"
+fi
+chmod 600 "$SSH_CONFIG"
+dim "  git clone $FORGE_ALIAS:$FORGE_USER/<repo>.git"
+info ""
+
+# --- 3. register the key ----------------------------------------------------
+
+step "register key on $FORGE_HOST"
+PUB="$(cat "$KEY.pub")"
+
+if [ "$UPLOAD" -eq 0 ]; then
+    warn "skipping upload (--no-upload)"
+    info "Add this at https://$FORGE_HOST/user/settings/keys :"
+    info ""
+    info "  $PUB"
+    info ""
+else
+    resp="$(api GET "/user/keys")"
+    code="$(resp_code "$resp")"
+    existing="$(resp_body "$resp")"
+    [ "$code" = "200" ] || die "could not list keys (HTTP $code). Check credentials."
+
+    fp="$(ssh-keygen -lf "$KEY.pub" | awk '{print $2}')"
+    if printf '%s' "$existing" | grep -qF "$fp"; then
+        ok "key already registered ($fp)"
+    else
+        body="$(mktemp)"; chmod 600 "$body"
+        python3 -c '
+import json, sys
+json.dump({"title": sys.argv[1], "key": sys.argv[2], "read_only": False},
+          open(sys.argv[3], "w"))
+' "$(hostname -s)" "$PUB" "$body"
+
+        created="$(api POST "/user/keys" "$body")"
+        rm -f "$body"
+        case "$(resp_code "$created")" in
+            201) ok "uploaded as '$(resp_body "$created" | json_field title)'" ;;
+            422) ok "already registered (server reported duplicate)" ;;
+            *)   die "upload failed (HTTP $(resp_code "$created")): $(resp_body "$created")" ;;
+        esac
+    fi
+fi
+info ""
+
+# --- 4. prove it ------------------------------------------------------------
+
+step "verify"
+greeting="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+                -o ConnectTimeout=10 -T "$FORGE_ALIAS" 2>&1 || true)"
+if printf '%s' "$greeting" | grep -qi "successfully authenticated"; then
+    ok "$(printf '%s' "$greeting" | head -1)"
+else
+    die "SSH auth failed:
+$greeting"
+fi
+
+info ""
+info "Done. Create your first repo with:  forge-new <name>"

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# forge-clone — clone a repo from the forge by bare name.
+#
+#   forge-clone myproject          ->  git clone forge:you/myproject.git
+#   forge-clone someone/myproject  ->  git clone forge:someone/myproject.git
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+source "$SCRIPT_DIR/../lib/common.sh"
+
+usage() {
+    cat <<EOF
+usage: forge-clone <name|owner/name> [dest] [-- <git clone args>]
+
+Clones from the forge without typing the full SSH URL.
+EOF
+}
+
+[ $# -ge 1 ] || { usage >&2; exit 2; }
+case "$1" in -h|--help) usage; exit 0 ;; esac
+
+need git
+load_config
+
+SPEC="$1"; shift
+DEST=""
+if [ $# -gt 0 ] && [ "$1" != "--" ]; then DEST="$1"; shift; fi
+[ "${1:-}" = "--" ] && shift
+
+case "$SPEC" in
+    */*) TARGET="$SPEC" ;;
+    *)   TARGET="$FORGE_USER/$SPEC" ;;
+esac
+
+URL="$FORGE_ALIAS:$TARGET.git"
+step "git clone $URL${DEST:+ $DEST}"
+
+if [ -n "$DEST" ]; then
+    git clone "$@" "$URL" "$DEST"
+else
+    git clone "$@" "$URL"
+fi
+
+ok "cloned $TARGET"

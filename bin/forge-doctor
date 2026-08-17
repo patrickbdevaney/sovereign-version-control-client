@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# forge-doctor — check every link in the chain from this machine to the forge.
+#
+# Exits non-zero if any required check fails. Safe to run any time; it only
+# reads. The API check is skipped unless a token file exists.
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+source "$SCRIPT_DIR/../lib/common.sh"
+
+# Checks report rather than abort, so one failure still shows the rest.
+set +e
+
+FAILED=0
+pass() { printf '%s  ok  %s%s\n' "$_c_grn" "$_c_off" "$*"; }
+fail() { printf '%sfail%s  %s\n' "$_c_red" "$_c_off" "$*"; FAILED=1; }
+skip() { printf '%sskip%s  %s\n' "$_c_dim" "$_c_off" "$*"; }
+
+load_config
+dim "config: $FORGE_CONF_USED"
+dim "forge:  $FORGE_USER@$FORGE_HOST:$FORGE_SSH_PORT (alias '$FORGE_ALIAS')"
+info ""
+
+# 1. private key ------------------------------------------------------------
+step "key"
+KEY="$(expand_tilde "$FORGE_KEY")"
+if [ -f "$KEY" ]; then
+    perms="$(stat -c '%a' "$KEY" 2>/dev/null || stat -f '%Lp' "$KEY")"
+    if [ "$perms" = "600" ]; then
+        pass "$KEY (mode 600)"
+    else
+        fail "$KEY is mode $perms; SSH will refuse it. chmod 600 \"$KEY\""
+    fi
+    [ -f "$KEY.pub" ] && dim "  $(ssh-keygen -lf "$KEY.pub" 2>/dev/null)"
+else
+    fail "no key at $KEY — run forge-setup"
+fi
+
+# 2. ssh config -------------------------------------------------------------
+step "ssh config"
+resolved="$(ssh -G "$FORGE_ALIAS" 2>/dev/null)"
+if [ -n "$resolved" ]; then
+    r_host="$(printf '%s\n' "$resolved" | awk '/^hostname /{print $2; exit}')"
+    r_port="$(printf '%s\n' "$resolved" | awk '/^port /{print $2; exit}')"
+    r_user="$(printf '%s\n' "$resolved" | awk '/^user /{print $2; exit}')"
+    if [ "$r_host" = "$FORGE_HOST" ] && [ "$r_port" = "$FORGE_SSH_PORT" ]; then
+        pass "'$FORGE_ALIAS' -> $r_user@$r_host:$r_port"
+    else
+        fail "'$FORGE_ALIAS' resolves to $r_user@$r_host:$r_port, expected git@$FORGE_HOST:$FORGE_SSH_PORT"
+    fi
+else
+    fail "ssh knows nothing about host '$FORGE_ALIAS' — run forge-setup"
+fi
+
+# 3. reachability -----------------------------------------------------------
+step "network"
+if command -v tailscale >/dev/null 2>&1; then
+    if tailscale status >/dev/null 2>&1; then
+        pass "tailscale up"
+    else
+        skip "tailscale installed but not connected (fine if you are on the LAN)"
+    fi
+fi
+
+if timeout 8 bash -c "echo > /dev/tcp/$FORGE_HOST/$FORGE_SSH_PORT" 2>/dev/null; then
+    pass "tcp $FORGE_HOST:$FORGE_SSH_PORT open"
+else
+    fail "cannot reach $FORGE_HOST:$FORGE_SSH_PORT"
+    if [ -n "$FORGE_LAN_HOST" ]; then
+        if timeout 5 bash -c "echo > /dev/tcp/$FORGE_LAN_HOST/$FORGE_SSH_PORT" 2>/dev/null; then
+            dim "  but the LAN address works: use ${FORGE_ALIAS}-lan"
+        fi
+    fi
+fi
+
+code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://$FORGE_HOST/" 2>/dev/null)"
+if [ "$code" = "200" ]; then
+    pass "https://$FORGE_HOST/ -> 200"
+else
+    fail "https://$FORGE_HOST/ -> ${code:-no response}"
+fi
+
+# 4. ssh auth ---------------------------------------------------------------
+step "ssh auth"
+greeting="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+                -o ConnectTimeout=10 -T "$FORGE_ALIAS" 2>&1)"
+if printf '%s' "$greeting" | grep -qi "successfully authenticated"; then
+    pass "$(printf '%s' "$greeting" | head -1)"
+elif printf '%s' "$greeting" | grep -qi "permission denied"; then
+    fail "key rejected — register it at https://$FORGE_HOST/user/settings/keys"
+else
+    fail "$(printf '%s' "$greeting" | head -2)"
+fi
+
+# 5. api --------------------------------------------------------------------
+step "api"
+token_path="$(expand_tilde "$FORGE_TOKEN_FILE")"
+if [ -f "$token_path" ]; then
+    resp="$(api GET "/user" 2>/dev/null)"
+    code="$(resp_code "$resp")"
+    if [ "$code" = "200" ]; then
+        pass "authenticated as $(resp_body "$resp" | json_field login)"
+    elif [ "$code" = "000" ]; then
+        fail "could not reach the API at $FORGE_API"
+    else
+        fail "token rejected (HTTP $code) — regenerate at https://$FORGE_HOST/user/settings/applications"
+    fi
+else
+    skip "no token at $token_path (forge-new will prompt for a password)"
+fi
+
+# 6. this repo --------------------------------------------------------------
+step "current directory"
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if url="$(git remote get-url origin 2>/dev/null)"; then
+        case "$url" in
+            "$FORGE_ALIAS":*)
+                if git ls-remote origin >/dev/null 2>&1; then
+                    pass "origin $url reachable"
+                else
+                    fail "origin $url is not reachable"
+                fi ;;
+            *) skip "origin points elsewhere: $url" ;;
+        esac
+    else
+        skip "git repo with no origin (forge-new would adopt it)"
+    fi
+else
+    skip "not inside a git repo"
+fi
+
+info ""
+if [ "$FAILED" -eq 0 ]; then
+    printf '%sall checks passed%s\n' "$_c_grn" "$_c_off"
+else
+    printf '%ssome checks failed%s\n' "$_c_red" "$_c_off"
+fi
+exit "$FAILED"
